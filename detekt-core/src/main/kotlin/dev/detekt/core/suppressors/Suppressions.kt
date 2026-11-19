@@ -17,33 +17,37 @@ private val FORBIDDEN_SUPPRESS_NAME = RuleName("ForbiddenSuppress")
  * If this element cannot have annotations, the first annotative parent is searched.
  */
 fun KtElement.isSuppressedBy(id: String, aliases: Set<String>, ruleSetId: RuleSetId? = null): Boolean {
-    val acceptedSuppressionIds = mutableSetOf(id, "ALL", "all", "All")
-    if (ruleSetId != null) {
-        acceptedSuppressionIds.addAll(listOf(ruleSetId.value, "$ruleSetId.$id", "$ruleSetId:$id"))
-    }
-    acceptedSuppressionIds.addAll(aliases)
-
     if (isForbiddenSuppressById(id)) return false
 
-    return allAnnotationEntries()
-        .filter { it.typeReference?.text in suppressionAnnotations }
-        .flatMap { it.valueArguments }
-        .mapNotNull { it.getArgumentExpression()?.text }
-        .map { it.replace(detektSuppressionPrefixRegex, "") }
-        .map { it.replace(QUOTES, "") }
-        .any { it in acceptedSuppressionIds }
-}
-
-private fun KtElement.allAnnotationEntries(): Sequence<KtAnnotationEntry> {
-    val element = this
-    return sequence {
+    // Each annotated element's suppressions are read once: every rule asks
+    // about every file and each of its findings' elements.
+    var element: KtElement? = this
+    while (element != null) {
         if (element is KtAnnotated) {
-            yieldAll(element.annotationEntries)
+            for (s in suppressions(element)) {
+                if (s == id || s in allSuppressions || s in aliases) return true
+                if (ruleSetId != null && (s == ruleSetId.value || s == "$ruleSetId.$id" || s == "$ruleSetId:$id")) return true
+            }
         }
-
-        element.getStrictParentOfType<KtAnnotated>()?.let { yieldAll(it.allAnnotationEntries()) }
+        element = element.getStrictParentOfType<KtAnnotated>()
     }
+    return false
 }
+
+private val allSuppressions = setOf("ALL", "all", "All")
+
+/** The ids [element]'s @Suppress and @SuppressWarnings annotations name, without detekt's prefix and quotes. */
+private fun suppressions(element: KtAnnotated): List<String> =
+    suppressionCache.getOrPut(element) {
+        element.annotationEntries
+            .filter { it.typeReference?.text in suppressionAnnotations }
+            .flatMap { it.valueArguments }
+            .mapNotNull { it.getArgumentExpression()?.text }
+            .map { it.replace(detektSuppressionPrefixRegex, "") }
+            .map { it.replace(QUOTES, "") }
+    }
+
+private val suppressionCache = java.util.concurrent.ConcurrentHashMap<KtAnnotated, List<String>>()
 
 private val detektSuppressionPrefixRegex = "detekt[.:]".toRegex(IGNORE_CASE)
 private const val QUOTES = "\""
