@@ -15,7 +15,11 @@ import dev.detekt.api.internal.whichJava
 import dev.detekt.api.internal.whichOS
 import dev.detekt.core.suppressors.buildSuppressors
 import dev.detekt.core.suppressors.isSuppressedBy
+import dev.detekt.core.util.analyzedPath
+import dev.detekt.core.util.createPathFilters
 import dev.detekt.core.util.shouldAnalyzeFile
+import dev.detekt.utils.PathFilters
+import java.util.IdentityHashMap
 import dev.detekt.psi.absolutePath
 import dev.detekt.tooling.api.AnalysisMode
 import org.jetbrains.kotlin.config.LanguageVersionSettings
@@ -41,6 +45,19 @@ internal class Analyzer(
     private val processors: List<FileProcessListener>,
     private val analysisMode: AnalysisMode,
 ) {
+    /**
+     * The path filters of each rule's config and of its rule set's, made
+     * once: compiling their globs for each rule and file cost more than
+     * matching them.
+     */
+    private val pathFilters: Map<Config, PathFilters?> = IdentityHashMap<Config, PathFilters?>().also { m ->
+        for (r in rules) {
+            listOfNotNull(r.config, r.config.parent).forEach { c -> if (!m.containsKey(c)) m[c] = c.createPathFilters() }
+        }
+    }
+
+    private fun filters(c: Config): PathFilters? = if (pathFilters.containsKey(c)) pathFilters[c] else c.createPathFilters()
+
     fun run(ktFiles: Collection<KtFile>): List<Issue> {
         val languageVersionSettings = settings.languageVersionSettings
 
@@ -82,6 +99,7 @@ internal class Analyzer(
         val parts = IntArray(files.size) { i ->
             if (schedule) ((files[i].textLength + share - 1) / share).toInt().coerceIn(1, threads) else 1
         }
+        val paths = files.map { analyzedPath(it, settings.spec.projectSpec.basePath) }
         val results = Array(files.size) { ConcurrentLinkedQueue<RuleResult>() }
         val started = Array(files.size) { AtomicBoolean() }
         val left = AtomicIntegerArray(IntArray(files.size) { parts[it] * phases.size })
@@ -94,7 +112,7 @@ internal class Analyzer(
                     tasks += service.task {
                         try {
                             if (started[i].compareAndSet(false, true)) processors.forEach { it.onProcess(file) }
-                            for (d in group) analyze(file, d, languageVersionSettings)?.let(results[i]::add)
+                            for (d in group) analyze(file, paths[i], d, languageVersionSettings)?.let(results[i]::add)
                             if (left.decrementAndGet(i) == 0) {
                                 processors.forEach { it.onProcessComplete(file, issuesOf(results[i])) }
                             }
@@ -116,11 +134,11 @@ internal class Analyzer(
     private class RuleResult(val index: Int, val autoCorrect: Boolean, val issues: List<Issue>)
 
     /** The issues rule [index] finds in [file], or null if it doesn't run on it. */
-    private fun analyze(file: KtFile, index: Int, languageVersionSettings: LanguageVersionSettings): RuleResult? {
+    private fun analyze(file: KtFile, path: Path, index: Int, languageVersionSettings: LanguageVersionSettings): RuleResult? {
         val ruleDescriptor = rules[index]
         val basePath = settings.spec.projectSpec.basePath
-        if (ruleDescriptor.config.parent?.shouldAnalyzeFile(file, basePath) == false) return null
-        if (!ruleDescriptor.config.shouldAnalyzeFile(file, basePath)) return null
+        if (ruleDescriptor.config.parent?.let { shouldAnalyzeFile(filters(it), path) } == false) return null
+        if (!shouldAnalyzeFile(filters(ruleDescriptor.config), path)) return null
         val ruleInstance = ruleDescriptor.ruleInstance
         val rule = ruleDescriptor.ruleProvider(ruleDescriptor.config)
         if (file.isSuppressedBy(ruleInstance.id, rule.aliases, ruleInstance.ruleSetId)) return null
@@ -145,12 +163,13 @@ internal class Analyzer(
     }
 
     private fun analyze(file: KtFile, languageVersionSettings: LanguageVersionSettings): List<Issue> {
+        val path = analyzedPath(file, settings.spec.projectSpec.basePath)
         val (correctableRules, otherRules) = rules.asSequence()
             .filter { ruleDescriptor ->
-                ruleDescriptor.config.parent?.shouldAnalyzeFile(file, settings.spec.projectSpec.basePath) != false
+                ruleDescriptor.config.parent?.let { shouldAnalyzeFile(filters(it), path) } != false
             }
             .filter { ruleDescriptor ->
-                ruleDescriptor.config.shouldAnalyzeFile(file, settings.spec.projectSpec.basePath)
+                shouldAnalyzeFile(filters(ruleDescriptor.config), path)
             }
             .map { ruleDescriptor ->
                 ruleDescriptor.ruleInstance to ruleDescriptor.ruleProvider(ruleDescriptor.config)

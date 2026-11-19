@@ -15,7 +15,14 @@ internal fun Config.shouldAnalyzeFile(file: KtFile, basePath: Path): Boolean {
     return filters == null || !filters.isIgnored(file, basePath)
 }
 
-private fun Config.createPathFilters(): PathFilters? {
+/** [shouldAnalyzeFile] for the file at [relativePath] (see [analyzedPath]), with this config's [filters]. */
+internal fun shouldAnalyzeFile(filters: PathFilters?, relativePath: Path): Boolean =
+    filters == null || !filters.isIgnored(relativePath)
+
+/** The path of [ktFile] that a config's path filters match. */
+internal fun analyzedPath(ktFile: KtFile, basePath: Path): Path = Path(".", ktFile.absolutePath().relativeTo(basePath).toString())
+
+internal fun Config.createPathFilters(): PathFilters? {
     val includes = valueOrDefault(Config.INCLUDES_KEY, emptyList<String>())
     val excludes = valueOrDefault(Config.EXCLUDES_KEY, emptyList<String>())
     return PathFilters.of(includes, excludes)
