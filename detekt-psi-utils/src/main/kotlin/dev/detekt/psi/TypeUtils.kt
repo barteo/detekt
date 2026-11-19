@@ -3,7 +3,6 @@ package dev.detekt.psi
 import org.jetbrains.kotlin.analysis.api.KaExperimentalApi
 import org.jetbrains.kotlin.analysis.api.analyze
 import org.jetbrains.kotlin.analysis.api.components.KaDiagnosticCheckerFilter
-import org.jetbrains.kotlin.analysis.api.fir.diagnostics.KaFirDiagnostic
 import org.jetbrains.kotlin.psi.KtExpression
 import org.jetbrains.kotlin.psi.KtSafeQualifiedExpression
 
@@ -25,7 +24,7 @@ fun KtExpression.isNullable(shouldConsiderPlatformTypeAsNullable: Boolean): Bool
     if (this is KtSafeQualifiedExpression) {
         analyze(this) {
             return directDiagnostics(KaDiagnosticCheckerFilter.ONLY_COMMON_CHECKERS)
-                .none { it is KaFirDiagnostic.UnnecessarySafeCall }
+                .none { it.factoryName == "UNNECESSARY_SAFE_CALL" }
         }
     }
     analyze(this) {

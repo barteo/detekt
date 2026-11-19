@@ -9,7 +9,6 @@ import dev.detekt.api.Rule
 import org.jetbrains.kotlin.analysis.api.KaExperimentalApi
 import org.jetbrains.kotlin.analysis.api.analyze
 import org.jetbrains.kotlin.analysis.api.components.KaDiagnosticCheckerFilter
-import org.jetbrains.kotlin.analysis.api.fir.diagnostics.KaFirDiagnostic
 import org.jetbrains.kotlin.psi.KtSafeQualifiedExpression
 
 /**
@@ -40,7 +39,7 @@ class UnnecessarySafeCall(config: Config) :
         val isUnnecessarySafeCall = analyze(expression) {
             expression
                 .directDiagnostics(KaDiagnosticCheckerFilter.ONLY_COMMON_CHECKERS)
-                .any { it is KaFirDiagnostic.UnnecessarySafeCall }
+                .any { it.factoryName == "UNNECESSARY_SAFE_CALL" }
         }
 
         if (isUnnecessarySafeCall) {

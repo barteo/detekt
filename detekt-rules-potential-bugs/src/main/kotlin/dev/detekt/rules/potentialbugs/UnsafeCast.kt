@@ -10,7 +10,6 @@ import dev.detekt.api.Rule
 import org.jetbrains.kotlin.analysis.api.KaExperimentalApi
 import org.jetbrains.kotlin.analysis.api.analyze
 import org.jetbrains.kotlin.analysis.api.components.KaDiagnosticCheckerFilter
-import org.jetbrains.kotlin.analysis.api.fir.diagnostics.KaFirDiagnostic
 import org.jetbrains.kotlin.lexer.KtTokens
 import org.jetbrains.kotlin.psi.KtBinaryExpressionWithTypeRHS
 import org.jetbrains.kotlin.psi.KtOperationReferenceExpression
@@ -51,7 +50,7 @@ class UnsafeCast(config: Config) :
         val isCastNeverSucceeds = analyze(expression) {
             expression
                 .directDiagnostics(KaDiagnosticCheckerFilter.ONLY_COMMON_CHECKERS)
-                .any { it is KaFirDiagnostic.CastNeverSucceeds }
+                .any { it.factoryName == "CAST_NEVER_SUCCEEDS" }
         }
 
         if (isCastNeverSucceeds) {

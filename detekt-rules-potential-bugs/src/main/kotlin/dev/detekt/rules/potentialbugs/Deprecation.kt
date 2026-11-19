@@ -9,7 +9,6 @@ import dev.detekt.api.Rule
 import org.jetbrains.kotlin.analysis.api.KaExperimentalApi
 import org.jetbrains.kotlin.analysis.api.analyze
 import org.jetbrains.kotlin.analysis.api.components.KaDiagnosticCheckerFilter
-import org.jetbrains.kotlin.analysis.api.fir.diagnostics.KaFirDiagnostic
 import org.jetbrains.kotlin.psi.KtElement
 import org.jetbrains.kotlin.psi.KtNamedDeclaration
 
@@ -43,7 +42,7 @@ class Deprecation(config: Config) :
         analyze(element) {
             element
                 .directDiagnostics(KaDiagnosticCheckerFilter.ONLY_COMMON_CHECKERS)
-                .firstNotNullOfOrNull { it as? KaFirDiagnostic.Deprecation }
-                ?.message
+                .firstOrNull { it.factoryName == "DEPRECATION" }
+                ?.defaultMessage
         }
 }

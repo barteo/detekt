@@ -9,7 +9,6 @@ import dev.detekt.api.Rule
 import org.jetbrains.kotlin.analysis.api.KaExperimentalApi
 import org.jetbrains.kotlin.analysis.api.analyze
 import org.jetbrains.kotlin.analysis.api.components.KaDiagnosticCheckerFilter
-import org.jetbrains.kotlin.analysis.api.fir.diagnostics.KaFirDiagnostic
 import org.jetbrains.kotlin.lexer.KtTokens
 import org.jetbrains.kotlin.psi.KtUnaryExpression
 
@@ -42,7 +41,7 @@ class UnnecessaryNotNullOperator(config: Config) :
 
         analyze(expression) {
             val compilerReports = expression.directDiagnostics(KaDiagnosticCheckerFilter.ONLY_COMMON_CHECKERS)
-            if (compilerReports.any { it is KaFirDiagnostic.UnnecessaryNotNullAssertion }) {
+            if (compilerReports.any { it.factoryName == "UNNECESSARY_NOT_NULL_ASSERTION" }) {
                 report(
                     Finding(
                         Entity.from(expression),

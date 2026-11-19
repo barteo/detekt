@@ -9,7 +9,6 @@ import dev.detekt.api.Rule
 import org.jetbrains.kotlin.analysis.api.KaExperimentalApi
 import org.jetbrains.kotlin.analysis.api.analyze
 import org.jetbrains.kotlin.analysis.api.components.KaDiagnosticCheckerFilter
-import org.jetbrains.kotlin.analysis.api.fir.diagnostics.KaFirDiagnostic
 import org.jetbrains.kotlin.psi.KtExpression
 
 /**
@@ -47,7 +46,7 @@ class UnreachableCode(config: Config) :
         val isUnreachableCode = analyze(expression) {
             expression
                 .directDiagnostics(KaDiagnosticCheckerFilter.EXTENDED_AND_COMMON_CHECKERS)
-                .any { it is KaFirDiagnostic.UnreachableCode || it is KaFirDiagnostic.UselessElvis }
+                .any { it.factoryName == "UNREACHABLE_CODE" || it.factoryName == "USELESS_ELVIS" }
         }
 
         if (isUnreachableCode) {
