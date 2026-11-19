@@ -6,6 +6,7 @@ import dev.detekt.api.FileProcessListener
 import dev.detekt.api.Finding
 import dev.detekt.api.Issue
 import dev.detekt.api.Location
+import dev.detekt.api.RequiresAnalysisApi
 import dev.detekt.api.Rule
 import dev.detekt.api.RuleInstance
 import dev.detekt.api.Severity
@@ -20,6 +21,19 @@ import dev.detekt.tooling.api.AnalysisMode
 import org.jetbrains.kotlin.config.LanguageVersionSettings
 import org.jetbrains.kotlin.psi.KtFile
 import java.nio.file.Path
+import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicIntegerArray
+
+// kc's session (kotlin-compiler-go) analyzes the sources in the background
+// while detekt sets up, and with -Dkc.overlap=true the rules that need no
+// types run before it is done. It is off by default: on 4 cores, those rules
+// and kc's analysis compete for the same CPUs, and it measured no faster on
+// kotlinpoet and slower on kotlinx-coroutines-core. Without it each file's
+// rules run in one task, as in stock detekt. -Dkc.schedule=false keeps the
+// files' order and one task per file and phase.
+private val overlap = System.getProperty("kc.overlap") == "true"
+private val schedule = System.getProperty("kc.schedule") != "false"
 
 internal class Analyzer(
     private val settings: ProcessingSettings,
@@ -49,6 +63,75 @@ internal class Analyzer(
         }
 
     private fun runAsync(ktFiles: Collection<KtFile>, languageVersionSettings: LanguageVersionSettings): List<Issue> {
+        if (!overlap || settings.spec.rulesSpec.autoCorrect) return runAsyncByFile(ktFiles, languageVersionSettings)
+        val service = settings.taskPool
+        val files = ktFiles.toList()
+        // The rules that need no types run first, for every file, while the
+        // Analysis API session may still be analyzing; then the ones that
+        // need it (RequiresAnalysisApi), which wait for it. Autocorrect,
+        // which changes the PSI, keeps a file's rules in one task
+        // (runAsyncByFile).
+        val needsTypes = rules.map { it.ruleProvider(Config.empty) is RequiresAnalysisApi }
+        val phases = listOf(rules.indices.filter { !needsTypes[it] }, rules.indices.filter { needsTypes[it] })
+            .filter { it.isNotEmpty() }
+        // Largest files first, and a large file's rules split over several
+        // tasks, so that no thread is left with a long file at the end.
+        val threads = Runtime.getRuntime().availableProcessors().coerceAtLeast(1)
+        val order = if (schedule) files.indices.sortedByDescending { files[it].textLength } else files.indices.toList()
+        val share = (files.sumOf { it.textLength.toLong() } / (2L * threads)).coerceAtLeast(1)
+        val parts = IntArray(files.size) { i ->
+            if (schedule) ((files[i].textLength + share - 1) / share).toInt().coerceIn(1, threads) else 1
+        }
+        val results = Array(files.size) { ConcurrentLinkedQueue<RuleResult>() }
+        val started = Array(files.size) { AtomicBoolean() }
+        val left = AtomicIntegerArray(IntArray(files.size) { parts[it] * phases.size })
+        val tasks = ArrayList<Task<Unit>>()
+        for (phase in phases) {
+            for (i in order) {
+                val file = files[i]
+                for (k in 0 until parts[i]) {
+                    val group = phase.filterIndexed { j, _ -> j % parts[i] == k }
+                    tasks += service.task {
+                        try {
+                            if (started[i].compareAndSet(false, true)) processors.forEach { it.onProcess(file) }
+                            for (d in group) analyze(file, d, languageVersionSettings)?.let(results[i]::add)
+                            if (left.decrementAndGet(i) == 0) {
+                                processors.forEach { it.onProcessComplete(file, issuesOf(results[i])) }
+                            }
+                        } catch (e: Throwable) {
+                            throwIllegalStateException(file, e)
+                        }
+                    }
+                }
+            }
+        }
+        awaitAll(tasks)
+        return results.flatMap(::issuesOf)
+    }
+
+    /** The issues of a file's rules, in the order a serial run finds them: correctable rules first. */
+    private fun issuesOf(results: Collection<RuleResult>): List<Issue> =
+        results.sortedWith(compareBy<RuleResult>({ if (it.autoCorrect) 0 else 1 }, { it.index })).flatMap { it.issues }
+
+    private class RuleResult(val index: Int, val autoCorrect: Boolean, val issues: List<Issue>)
+
+    /** The issues rule [index] finds in [file], or null if it doesn't run on it. */
+    private fun analyze(file: KtFile, index: Int, languageVersionSettings: LanguageVersionSettings): RuleResult? {
+        val ruleDescriptor = rules[index]
+        val basePath = settings.spec.projectSpec.basePath
+        if (ruleDescriptor.config.parent?.shouldAnalyzeFile(file, basePath) == false) return null
+        if (!ruleDescriptor.config.shouldAnalyzeFile(file, basePath)) return null
+        val ruleInstance = ruleDescriptor.ruleInstance
+        val rule = ruleDescriptor.ruleProvider(ruleDescriptor.config)
+        if (file.isSuppressedBy(ruleInstance.id, rule.aliases, ruleInstance.ruleSetId)) return null
+        val issues = rule.visitFile(file, languageVersionSettings)
+            .filterNot { it.entity.ktElement.isSuppressedBy(ruleInstance.id, rule.aliases, ruleInstance.ruleSetId) }
+            .filterSuppressedFindings(rule, analysisMode)
+            .map { it.toIssue(ruleInstance, ruleInstance.severity, basePath) }
+        return RuleResult(index, rule.autoCorrect, issues)
+    }
+
+    private fun runAsyncByFile(ktFiles: Collection<KtFile>, languageVersionSettings: LanguageVersionSettings): List<Issue> {
         val service = settings.taskPool
         val tasks: TaskList<List<Issue>?> = ktFiles.map { file ->
             service.task {

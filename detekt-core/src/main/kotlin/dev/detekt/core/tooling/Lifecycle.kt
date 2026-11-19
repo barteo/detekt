@@ -34,7 +34,10 @@ internal class Lifecycle(
     fun analyze(): Detektion {
         measure(Phase.ValidateConfig) { checkConfiguration(settings, baselineConfig) }
         val filesToAnalyze = measure(Phase.Parsing) { settings.ktFiles }
-        if (settings.spec.projectSpec.analysisMode == AnalysisMode.full) {
+        // A session that reports its own errors (kc's) analyzes in the
+        // background, and the rules that need no types run meanwhile
+        // (Analyzer), so its errors aren't waited for here.
+        if (settings.spec.projectSpec.analysisMode == AnalysisMode.full && !settings.reportsOwnErrors) {
             measure(Phase.ValidateClasspath) { validateClasspath(filesToAnalyze) }
         }
         val analysisMode = settings.spec.projectSpec.analysisMode

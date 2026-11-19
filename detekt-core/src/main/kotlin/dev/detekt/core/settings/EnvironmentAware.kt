@@ -29,6 +29,13 @@ import java.io.PrintStream
 interface EnvironmentAware {
     val languageVersionSettings: LanguageVersionSettings
     val ktFiles: List<KtFile>
+
+    /**
+     * Whether the analysis session reports the errors in the sources
+     * itself, so that collecting each file's diagnostics would only wait
+     * for its analysis.
+     */
+    val reportsOwnErrors: Boolean get() = false
 }
 
 internal class EnvironmentFacade(projectSpec: ProjectSpec, compilerSpec: CompilerSpec, loggingSpec: LoggingSpec) :
@@ -55,6 +62,11 @@ internal class EnvironmentFacade(projectSpec: ProjectSpec, compilerSpec: Compile
 
     override val ktFiles: List<KtFile>
         get() = session.ktFiles
+
+    // kc prints the errors it finds in the sources (KcStandalone), and its
+    // collectDiagnostics has none to add.
+    override val reportsOwnErrors: Boolean
+        get() = System.getProperty("kc.overlap") == "true"
 
     // kc's Analysis API session (kotlin-compiler-go's jvm/kc-aa) stands in for
     // the standalone one: the source module, with the JDK, the friend paths
